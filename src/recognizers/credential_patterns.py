@@ -10,6 +10,18 @@ Entity types yang didefinisikan di sini:
 - DB_CONNECTION_STRING  : URI koneksi database (postgresql://, mysql://, dst.)
 - API_KEY               : API key / token assignment
 - HOST_PORT             : IP:port pattern
+- USERNAME              : nilai username pada pola key-value
+
+PENTING — span hasil deteksi (`start`/`end`) untuk CREDENTIAL_KV, API_KEY, dan
+USERNAME HANYA mencakup nilainya (value), bukan label ("password:") atau tanda
+kutip/backtick di sekitarnya. Ini wajib untuk skema replace-balik literal value
+ke markdown asli di `src/replace_engine.py` — kalau span ikut menyertakan label,
+literal hasil capture ("Password: mySecret") tidak akan pernah cocok dengan raw
+markdown yang isinya cuma "mySecret" (mis. di dalam sel tabel). Recognizer yang
+butuh perilaku ini meng-override `analyze()` dan mengembalikan span dari capture
+group value saja — pola yang sama seperti `UsernameRecognizer` di bawah.
+DB_CONNECTION_STRING dan HOST_PORT tidak butuh override karena pattern-nya
+memang cuma cocok ke value itu sendiri (tidak ada label di depan match).
 """
 
 import re
@@ -35,26 +47,49 @@ class CredentialKVRecognizer(PatternRecognizer):
     Context words meningkatkan score saat kata di sekitarnya juga terkait credential.
     """
 
-    PATTERNS = [
-        Pattern(
-            name="credential_kv",
-            regex=(
-                r"(?i)"
-                r"(?:\b[a-z_]*password|\bpasswd|\bpwd|\bsecret|\bpassphrase|\bdb_pass)\b\s*[:=;]\s*[`\"']?\S+"
-            ),
-            score=0.75,
-        ),
-    ]
+    REGEX_STR = (
+        r"(?i)\b(?:[a-z_]*password|passwd|pwd|secret|passphrase|db_pass)\b"
+        r"\s*[:=;]\s*[`\"']?([^\s`\"',;]+)"
+    )
+    COMPILED_REGEX = re.compile(REGEX_STR)
 
     CONTEXT = ["password", "credential", "secret", "login", "auth", "passwd", "pwd"]
 
     def __init__(self) -> None:
         super().__init__(
             supported_entity="CREDENTIAL_KV",
-            patterns=self.PATTERNS,
+            name="CredentialKVRecognizer",
+            patterns=[Pattern(name="credential_kv", regex=self.REGEX_STR, score=0.75)],
             context=self.CONTEXT,
             supported_language="en",
         )
+
+    def analyze(self, text: str, entities: list[str] | None = None, nlp_artifacts=None) -> list[RecognizerResult]:
+        results: list[RecognizerResult] = []
+        if entities and "CREDENTIAL_KV" not in entities:
+            return results
+
+        for match in self.COMPILED_REGEX.finditer(text):
+            val_text = match.group(1)
+            if not val_text:
+                continue
+
+            explanation = AnalysisExplanation(
+                recognizer=self.name,
+                original_score=0.75,
+                pattern_name="credential_kv",
+                pattern=self.REGEX_STR,
+            )
+            results.append(
+                RecognizerResult(
+                    entity_type="CREDENTIAL_KV",
+                    start=match.start(1),
+                    end=match.end(1),
+                    score=0.75,
+                    analysis_explanation=explanation,
+                )
+            )
+        return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,7 +98,13 @@ class CredentialKVRecognizer(PatternRecognizer):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DBConnectionStringRecognizer(PatternRecognizer):
-    """PatternRecognizer untuk URI koneksi database."""
+    """
+    PatternRecognizer untuk URI koneksi database.
+
+    Char class di akhir pattern sengaja mengecualikan backtick/kutip/kurung
+    supaya URI yang ditulis dalam inline code (`` `postgresql://...` ``) tidak
+    ikut menyeret karakter markup di sekitarnya ke dalam span.
+    """
 
     PATTERNS = [
         Pattern(
@@ -71,7 +112,7 @@ class DBConnectionStringRecognizer(PatternRecognizer):
             regex=(
                 r"(?i)"
                 r"(?:postgresql|postgres|mysql|mongodb|mongo|redis|mssql|oracle|sqlite)"
-                r"(?:\+\w+)?://\S+:\S+@\S+"
+                r"(?:\+\w+)?://[^\s`\"'<>)]+:[^\s`\"'<>)]+@[^\s`\"'<>)]+"
             ),
             score=0.85,
         ),
@@ -90,39 +131,65 @@ class DBConnectionStringRecognizer(PatternRecognizer):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # API_KEY
-# Menangkap: api_key=AbCdEf1234567890, token: Bearer eyJhb..., API_KEY=...
+# Menangkap: api_key=AbCdEfGhIjKlMnOpQr, token: Bearer eyJhb..., API_KEY=...
 # Minimum 16 karakter supaya false-positive rendah
 # ─────────────────────────────────────────────────────────────────────────────
 
 class APIKeyRecognizer(PatternRecognizer):
-    """PatternRecognizer untuk API key dan token assignment."""
+    """
+    PatternRecognizer untuk API key dan token assignment.
 
-    PATTERNS = [
-        Pattern(
-            name="api_key_assignment",
-            regex=(
-                r"(?i)"
-                r"(?:api[_\-]?key|access[_\-]?key|token|secret[_\-]?key|auth[_\-]?token)"
-                r"\s*[:=]\s*[A-Za-z0-9\-_.~+/]{16,}"
-            ),
-            score=0.80,
-        ),
-        # Bearer token di header atau config
-        Pattern(
-            name="bearer_token",
-            regex=r"(?i)Bearer\s+[A-Za-z0-9\-_.~+/=]{20,}",
-            score=0.85,
-        ),
-    ]
+    Sama seperti CredentialKVRecognizer, `analyze()` di-override supaya span
+    hasil deteksi cuma value-nya (bukan label "api_key=" atau kata "Bearer").
+    """
+
+    ASSIGNMENT_REGEX_STR = (
+        r"(?i)\b(?:api[_\-]?key|access[_\-]?key|token|secret[_\-]?key|auth[_\-]?token)\b"
+        r"\s*[:=]\s*[`\"']?([A-Za-z0-9\-_.~+/]{16,})"
+    )
+    BEARER_REGEX_STR = r"(?i)\bBearer\s+([A-Za-z0-9\-_.~+/=]{20,})"
+
+    COMPILED_ASSIGNMENT = re.compile(ASSIGNMENT_REGEX_STR)
+    COMPILED_BEARER = re.compile(BEARER_REGEX_STR)
 
     CONTEXT = ["api", "key", "token", "auth", "authorization", "access", "secret"]
 
     def __init__(self) -> None:
         super().__init__(
             supported_entity="API_KEY",
-            patterns=self.PATTERNS,
+            name="APIKeyRecognizer",
+            patterns=[
+                Pattern(name="api_key_assignment", regex=self.ASSIGNMENT_REGEX_STR, score=0.80),
+                Pattern(name="bearer_token", regex=self.BEARER_REGEX_STR, score=0.85),
+            ],
             context=self.CONTEXT,
             supported_language="en",
+        )
+
+    def analyze(self, text: str, entities: list[str] | None = None, nlp_artifacts=None) -> list[RecognizerResult]:
+        results: list[RecognizerResult] = []
+        if entities and "API_KEY" not in entities:
+            return results
+
+        for match in self.COMPILED_ASSIGNMENT.finditer(text):
+            results.append(self._result(match, "api_key_assignment", 0.80))
+        for match in self.COMPILED_BEARER.finditer(text):
+            results.append(self._result(match, "bearer_token", 0.85))
+        return results
+
+    def _result(self, match: re.Match, pattern_name: str, score: float) -> RecognizerResult:
+        explanation = AnalysisExplanation(
+            recognizer=self.name,
+            original_score=score,
+            pattern_name=pattern_name,
+            pattern=match.re.pattern,
+        )
+        return RecognizerResult(
+            entity_type="API_KEY",
+            start=match.start(1),
+            end=match.end(1),
+            score=score,
+            analysis_explanation=explanation,
         )
 
 
@@ -244,4 +311,3 @@ def get_all_credential_recognizers() -> list:
         HostPortRecognizer(),
         UsernameRecognizer(),
     ]
-

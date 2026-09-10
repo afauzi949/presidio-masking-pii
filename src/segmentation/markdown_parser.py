@@ -10,36 +10,16 @@ Urutan output Segment menjaga urutan asli dokumen supaya reassembly benar.
 
 from __future__ import annotations
 
-import re
 from typing import List
 
 from markdown_it import MarkdownIt
 
 from src.segmentation.segment_types import Segment
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Internal helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
-
-
-def _extract_inline_codes(text: str) -> List[Segment]:
-    """
-    Kembalikan list Segment inline_code yang ditemukan di *text*.
-    Segmen ini tidak menggantikan prose — prose tetap dikembalikan terpisah,
-    tapi inline_code diekstrak untuk diproses oleh code_block_handler.
-
-    Catatan: pada reassembly, kita tetap memakai teks prose aslinya (yang sudah
-    di-mask oleh prose_handler), jadi fungsi ini hanya digunakan untuk inspeksi
-    apakah ada inline_code — penanganan inline_code di-delegate ke prose_handler
-    karena Presidio akan memprosesnya sebagai teks biasa.
-    """
-    segments: List[Segment] = []
-    for m in _INLINE_CODE_RE.finditer(text):
-        segments.append(Segment(type="inline_code", content=m.group(1), meta={"match": m}))
-    return segments
-
+# Catatan: inline code (`seperti_ini`) sengaja TIDAK diekstrak jadi segmen
+# tersendiri — dibiarkan sebagai bagian dari segmen "prose", diproses oleh
+# `src.reconstruction.strip_markdown` (yang mempertahankan isinya, cuma
+# backtick-nya yang dibuang) lalu dianalisis Presidio sebagai teks biasa.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main parser
@@ -173,7 +153,14 @@ def reassemble(segments: List[Segment]) -> str:
     """
     Gabungkan kembali list Segment menjadi satu string markdown.
 
-    Urutan segmen dijaga — output harus identik dengan input kecuali bagian
-    yang sudah di-mask.
+    Urutan segmen dijaga — output identik dengan input kalau segmen belum diubah.
+
+    CATATAN: fungsi ini TIDAK dipakai oleh `src.masker.mask_document()` di flow
+    masking saat ini. Masking terjadi lewat replace literal value ke markdown
+    ASLI (lihat `src.replace_engine`), bukan lewat menggabungkan ulang segmen
+    yang masing-masing sudah di-mask sendiri-sendiri — lihat plan.md bagian 0
+    dan Risiko #4. Fungsi ini tetap dipertahankan karena berguna untuk
+    memverifikasi fidelitas segmentasi (`test_markdown_parser.py`) dan sebagai
+    utilitas umum kalau suatu saat dibutuhkan kembali di luar flow masking.
     """
     return "".join(seg.content for seg in segments)

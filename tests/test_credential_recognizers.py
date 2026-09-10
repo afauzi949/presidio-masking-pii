@@ -76,10 +76,11 @@ class TestCredentialKVRecognizer:
         assert isinstance(results, list)
 
     def test_inline_env_var(self):
-        results = analyze("DB_PASSWORD=s3cr3t_pass!", "CREDENTIAL_KV")
-        # DB_PASSWORD tidak cocok pola (key harus password|passwd|pwd|secret)
-        # Ini bukan bug — key-based masking untuk ini ada di code_block_handler
-        assert isinstance(results, list)
+        """"[a-z_]*password" di pattern-nya cocok ke prefix apa pun, jadi DB_PASSWORD ikut terdeteksi."""
+        text = "DB_PASSWORD=s3cr3t_pass!"
+        results = analyze(text, "CREDENTIAL_KV")
+        assert results, "DB_PASSWORD=value harus terdeteksi"
+        assert text[results[0].start:results[0].end] == "s3cr3t_pass!"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
