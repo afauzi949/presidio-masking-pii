@@ -1,0 +1,29 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment variables (jaga-jaga — service ini pakai config hardcoded,
+# tapi kalau ada yang menambah .env lokal untuk eksperimen, jangan ke-commit)
+.env
+.env.local
+
+# Test / tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# IDE & editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+plan.md
